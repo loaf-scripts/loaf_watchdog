@@ -13,26 +13,38 @@ let nextId = 0
 
 const messageQueue = new Map<number, (response: any) => void>()
 
-function triggerEvent(action: string, data?: any) {
+function triggerEvent(action: string, ...args: any[]) {
     if (!parentPort) return
 
-    parentPort.postMessage({ action, data })
+    parentPort.postMessage({ action, data: args })
+}
+
+async function triggerCallback<T>(action: string, ...args: any[]): Promise<T> {
+    return new Promise((resolve) => {
+        const id = nextId++
+
+        messageQueue.set(id, resolve)
+        parentPort?.postMessage({ action, id, data: args })
+    })
 }
 
 function print(...args: any[]) {
     if (!parentPort) return
 
-    triggerEvent('log', [...args])
+    triggerEvent('log', ...args)
 }
 
-async function getResourceState(resourceName: string): Promise<string> {
-    return new Promise((resolve) => {
-        const id = nextId++
+function formatTime(ms: number) {
+    const seconds = Math.floor(ms / 1000)
+    const minutes = Math.floor(seconds / 60)
 
-        messageQueue.set(id, resolve)
-
-        triggerEvent('getResourceState', { resourceName, id })
-    })
+    if (minutes > 0) {
+        return `${minutes}m ${seconds % 60}s`
+    } else if (seconds > 0) {
+        return `${seconds}s`
+    } else {
+        return ms.toFixed(2) + 'ms'
+    }
 }
 
 function watch(data: {
@@ -46,6 +58,8 @@ function watch(data: {
     if (!parentPort) return
 
     const { root, currentResource, separator, config } = data
+
+    const startTime = Date.now()
 
     chokidar
         .watch(`${root}${separator}`, {
@@ -80,7 +94,10 @@ function watch(data: {
                 return print(`^1[ERROR]^7 Could not find resource name for ${path}`)
             } else if (resourceName === currentResource) {
                 return
-            } else if (!config.START_IF_NOT_STARTED && (await getResourceState(resourceName)) !== 'started') {
+            } else if (
+                !config.START_IF_NOT_STARTED &&
+                (await triggerCallback<string>('getResourceState', resourceName)) !== 'started'
+            ) {
                 return print(`Resource ^4${resourceName}^7 is not started. Ignoring changes.`)
             }
 
@@ -96,7 +113,7 @@ function watch(data: {
 
             if (debouncedRestart) clearTimeout(debouncedRestart)
 
-            debouncedRestart = setTimeout(() => {
+            debouncedRestart = setTimeout(async () => {
                 debouncedRestart = null
 
                 if (relativeFilePath === 'fxmanifest.lua' || event === 'add') {
@@ -114,17 +131,35 @@ function watch(data: {
                 }
 
                 print(`Restarting resource ^4${resourceName}^7`)
-                triggerEvent('restartResource', resourceName)
+
+                const previouslyStartedResources = await triggerCallback<string[]>('getStartedResources')
+
+                await triggerCallback('restartResource', resourceName)
+
+                const startedResources = new Set(await triggerCallback<string[]>('getStartedResources'))
+
+                for (const resource of previouslyStartedResources) {
+                    if (!startedResources.has(resource) && resource !== currentResource && resource !== resourceName) {
+                        print(`Starting resource ^4${resource}^7 due to ^4${resourceName}^7 changing`)
+                        triggerEvent('startResource', resource)
+                    }
+                }
             }, 500)
 
             print(`Resource ^4${resourceName}^7 changed. ${COLORS[event] ?? ''}${relativeFilePath}^7`)
+        })
+        .on('ready', () => {
+            print(`Initial scan complete in ${formatTime(Date.now() - startTime)}, watching for changes...`)
+        })
+        .on('error', (error) => {
+            print(`^1[ERROR]^7 Watcher error: ${error}`)
         })
 }
 
 parentPort!.on('message', (message: { action: string; id?: number; data: any }) => {
     const { action, id, data } = message
 
-    if (id) {
+    if (action === 'response' && id !== undefined) {
         const cb = messageQueue.get(id)
 
         cb?.(data)

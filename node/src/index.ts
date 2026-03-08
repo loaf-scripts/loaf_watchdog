@@ -14,16 +14,24 @@ const worker = new Worker(path.join(resourcePath, '/server/worker.js'))
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
-function onWorkerEvent<T>(event: string, callback: (data: T) => void) {
-    worker.on('message', (message: { action: string; [key: string]: any }) => {
-        if (message.action === event) {
-            callback(message.data)
+type AsArgs<T> = T extends any[] ? T : [T]
+
+function onWorkerEvent<T>(event: string, callback: (...args: AsArgs<T>) => any | Promise<any>) {
+    worker.on('message', async (message: { action: string; id?: number; data: AsArgs<T> }) => {
+        if (message.action !== event) return
+
+        const result = await callback(...message.data)
+
+        if (message.id !== undefined) {
+            const id = message.id
+
+            worker.postMessage({ action: 'response', id, data: result })
         }
     })
 }
 
-onWorkerEvent<any[]>('log', (data) => {
-    console.log('^6[Watchdog]^7', ...data)
+onWorkerEvent<any[]>('log', (...args) => {
+    console.log('^6[Watchdog]^7', ...args)
 })
 
 onWorkerEvent<string>('restartResource', async (resourceName) => {
@@ -31,6 +39,10 @@ onWorkerEvent<string>('restartResource', async (resourceName) => {
 
     await delay(250)
 
+    StartResource(resourceName)
+})
+
+onWorkerEvent<string>('startResource', (resourceName) => {
     StartResource(resourceName)
 })
 
@@ -42,14 +54,23 @@ onWorkerEvent('refreshResources', () => {
     ExecuteCommand('refresh')
 })
 
-onWorkerEvent<{ id: number; resourceName: string }>('getResourceState', (data) => {
-    const state = GetResourceState(data.resourceName)
+onWorkerEvent<string>('getResourceState', (resourceName) => {
+    return GetResourceState(resourceName)
+})
 
-    worker.postMessage({
-        action: 'response',
-        id: data.id,
-        data: state
-    })
+onWorkerEvent('getStartedResources', () => {
+    const numResources = GetNumResources()
+    const resources: string[] = []
+
+    for (let i = 0; i < numResources; i++) {
+        const resourceName = GetResourceByFindIndex(i)
+
+        if (resourceName && GetResourceState(resourceName) === 'started') {
+            resources.push(resourceName)
+        }
+    }
+
+    return resources
 })
 
 worker.on('error', (error) => {
