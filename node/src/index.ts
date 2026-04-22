@@ -91,6 +91,21 @@ onWorkerEvent('getResourceScriptFiles', (resourceName: string) => {
     return scriptFiles
 })
 
+onWorkerEvent('getResourceWatchConfig', (resourceName: string) => {
+    const watch: string[] = []
+    const ignore: string[] = []
+
+    for (let i = 0; i < GetNumResourceMetadata(resourceName, 'loaf_watchdog_watch'); i++) {
+        watch.push(GetResourceMetadata(resourceName, 'loaf_watchdog_watch', i))
+    }
+
+    for (let i = 0; i < GetNumResourceMetadata(resourceName, 'loaf_watchdog_ignore'); i++) {
+        ignore.push(GetResourceMetadata(resourceName, 'loaf_watchdog_ignore', i))
+    }
+
+    return { watch, ignore }
+})
+
 worker.on('error', (error) => {
     console.error('Worker error:', error)
 })

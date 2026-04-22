@@ -8,6 +8,8 @@ A FiveM script that automatically restarts resources when a `.lua` or `.js` file
 - Automatically refreshes resources when `fxmanifest.lua` is changed or created, or when files are created
 - Delete entities when resources are stopped
     - Can be disabled in `config.json` by changing `DELETE_ENTITIES`
+- Only files in `client_script`, `shared_script`, or `server_script` in the `fxmanifest.lua` are watched
+    - You can also set `loaf_watchdog_watch` and `loaf_watchdog_ignore` to watch or ignore specific files
 
 ## Installation
 

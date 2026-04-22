@@ -17,6 +17,7 @@ let nextId = 0
 
 const messageQueue = new Map<number, (response: any) => void>()
 const scriptFilesCache = new Map<string, Set<string>>()
+const watchConfigCache = new Map<string, { watch: string[]; ignore: string[] }>()
 
 function triggerEvent(action: string, ...args: any[]) {
     if (!parentPort) return
@@ -39,10 +40,27 @@ async function getResourceScriptFiles(resourceName: string): Promise<Set<string>
     }
 
     const files = await triggerCallback<Set<string>>('getResourceScriptFiles', resourceName)
+    const normalized = new Set([...files].map((p) => p.replace(/\*\*\./g, '**/*.')))
 
-    scriptFilesCache.set(resourceName, files)
+    scriptFilesCache.set(resourceName, normalized)
 
     return files
+}
+
+async function getResourceWatchConfig(resourceName: string): Promise<{ watch: string[]; ignore: string[] }> {
+    if (watchConfigCache.has(resourceName)) {
+        return watchConfigCache.get(resourceName)!
+    }
+
+    const config = await triggerCallback<{ watch: string[]; ignore: string[] }>('getResourceWatchConfig', resourceName)
+    const normalized = {
+        watch: config.watch.map((p) => p.replace(/\*\*\./g, '**/*.')),
+        ignore: config.ignore.map((p) => p.replace(/\*\*\./g, '**/*.'))
+    }
+
+    watchConfigCache.set(resourceName, normalized)
+
+    return config
 }
 
 function print(...args: any[]) {
@@ -133,14 +151,25 @@ function watch(data: {
 
             if (relativeFilePath === 'fxmanifest.lua') {
                 scriptFilesCache.delete(resourceName)
+                watchConfigCache.delete(resourceName)
             } else {
                 const scriptFiles = await getResourceScriptFiles(resourceName)
+                const { watch, ignore } = await getResourceWatchConfig(resourceName)
 
-                if (scriptFiles.size > 0) {
-                    const patterns = [...scriptFiles].map((p) => p.replace(/\*\*\./g, '**/*.'))
-                    const isMatch = picomatch.isMatch(relativeFilePath, patterns, { dot: true })
+                const watchPatterns = [...scriptFiles, ...watch]
+
+                if (watchPatterns.length > 0) {
+                    const isMatch = picomatch.isMatch(relativeFilePath, watchPatterns, { dot: true })
 
                     if (!isMatch) {
+                        return
+                    }
+                }
+
+                if (ignore.length > 0) {
+                    const isIgnored = picomatch.isMatch(relativeFilePath, ignore, { dot: true })
+
+                    if (isIgnored) {
                         return
                     }
                 }
